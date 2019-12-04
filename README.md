@@ -1,11 +1,13 @@
-# llvm-pass-skeleton
+# LLVM profiling tool
 
-A completely useless LLVM pass.
-It's for LLVM 9.
+This tool performs 3 things:
+1. Basic execution information including the number of LLVM instructions, basic blocks etc.
+2. Expensive instruction information like the number of memory operations, multiplications and branches since they are most likely to affect execution time.
+3. Function call information: the number of times each function is called.
 
 Build:
 
-    $ cd llvm-pass-skeleton
+    $ cd llvm_profiling
     $ mkdir build
     $ cd build
     $ cmake ..
