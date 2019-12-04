@@ -22,15 +22,15 @@ namespace {
       static char ID;
       SkeletonPass() : ModulePass(ID) {}
       
-      virtual bool runOnModule(Module &M);
-      virtual bool runOnFunction(Function &F, Module &M);
-      virtual bool runOnBasicBlock(BasicBlock &BB, Module &M);
+      virtual bool runOnModule(Module &M); //when there is a Module
+      virtual bool runOnFunction(Function &F, Module &M); //called by runOnModule
+      virtual bool runOnBasicBlock(BasicBlock &BB, Module &M); // called by runOnFunction
       
-      bool initialize(Module &M);
-      bool finialize(Module &M);
+      bool initialize(Module &M); //create global variable
+      bool finialize(Module &M); //print global variable
       void createInstr(BasicBlock &bb, Constant *counter_ptr, int num);
       
-      vector<string> atomicCounter = {"llvmInstrAtomicCounter", "basicBlockAtomicCounter", "mulAtomicCounter", "memOpAtomicCounter", "branchAtomicCounter"};;
+      vector<string> atomicCounter = {"llvmInstrAtomicCounter", "basicBlockAtomicCounter", "mulAtomicCounter", "memOpAtomicCounter", "branchAtomicCounter"}; //keep global variable names for profiling. e.g. instr counter
   };
 }
 
@@ -99,12 +99,13 @@ bool SkeletonPass::runOnFunction(Function &F, Module &M)
 }
 
 void SkeletonPass::createInstr(BasicBlock &bb, Constant *counter_ptr, int num){
-    if(num){
+    if(num){ // create atomic addition instruction
         new AtomicRMWInst(AtomicRMWInst::Add,
-                      counter_ptr,
-                      ConstantInt::get(Type::getInt64Ty(bb.getContext()), num),
-                      AtomicOrdering::SequentiallyConsistent,
-                      SyncScope::System, bb.getTerminator());
+                      counter_ptr, // pointer to global variable
+                      ConstantInt::get(Type::getInt64Ty(bb.getContext()), num), //create integer with value num
+                      AtomicOrdering::SequentiallyConsistent, //operations may not be reordered
+                      SyncScope::System, // synchronize to all threads
+                      bb.getTerminator()); //insert right before block terminator
     }
 }
 
@@ -123,6 +124,7 @@ bool SkeletonPass::runOnBasicBlock(BasicBlock &bb, Module &M)
     Constant *memCounter = M.getOrInsertGlobal("memOpAtomicCounter", I64Ty);
     assert(memCounter && "Could not declare or find memOpAtomicCounter global");
     
+    // get instruction number and basic block number.
     int instr = 0;
     int basic_block = 1;
     int mul_instr = 0;
@@ -133,20 +135,22 @@ bool SkeletonPass::runOnBasicBlock(BasicBlock &bb, Module &M)
     for (auto it = bb.begin(); it != bb.end(); it++) {
         //errs() << it->getOpcodeName() << "\n";
         switch (it->getOpcode()) {
-            case Instruction::Mul:
+            case Instruction::Mul: // multiplication
                 mul_instr++;
                 continue;
-            case Instruction::Br:
+            case Instruction::Br: // branch
                 br_instr++;
                 continue;
-            case Instruction::Store:
-            case Instruction::Load:
+            case Instruction::Store: // store
+            case Instruction::Load: // load
                 mem_instr++;
                 continue;
             default:
                 break;
         }
     }
+    
+    // create atomic addition instruction
     createInstr(bb, bbCounter, basic_block);
     createInstr(bb, instrCounter,instr);
     createInstr(bb, mulCounter,mul_instr);
@@ -196,31 +200,33 @@ bool SkeletonPass::finialize(Module &M){
         return false;
     // Build printf function handle
     std::vector<Type *> FTyArgs;
-    FTyArgs.push_back(Type::getInt8PtrTy(M.getContext()));
-    FunctionType *FTy = FunctionType::get(Type::getInt32Ty(M.getContext()), FTyArgs, true);
-    FunctionCallee printF = M.getOrInsertFunction("printf", FTy);
+    FTyArgs.push_back(Type::getInt8PtrTy(M.getContext())); // specify the first argument, i8* is the return type of CreateGlobalStringPtr
+    FunctionType *FTy = FunctionType::get(Type::getInt32Ty(M.getContext()), FTyArgs, true); // create function type with return type, argument types and if const argument
+    FunctionCallee printF = M.getOrInsertFunction("printf", FTy); // create function if not extern or defined
+    
     //assert(printF != NULL);
     
     for (auto bb = mainFunc->begin(); bb != mainFunc->end(); bb++) {
         for(auto it = bb->begin(); it != bb->end(); it++) {
             // insert at the end of main function
             if ((std::string)it->getOpcodeName() == "ret") {
+                 // insert printf at the end of main function, before return function
                 Builder.SetInsertPoint(&*bb, it);
                 for(int i = 0; i < atomicCounter.size(); i++){
                     // Build Arguments
                     Value *format_long;
                     if (i == 0){
-                    format_long = Builder.CreateGlobalStringPtr("\n\n"+atomicCounter[i]+": %ld\n", "formatLong");
+                    format_long = Builder.CreateGlobalStringPtr("\n\n"+atomicCounter[i]+": %ld\n", "formatLong"); // create global string variable formatLong, add suffix(.1/.2/...) if already exists
                     }else{
                         format_long = Builder.CreateGlobalStringPtr(atomicCounter[i]+": %ld\n", "formatLong");
                     }
                     std::vector<Value *> argVec;
                     argVec.push_back(format_long);
                     
-                    Value *atomic_counter = M.getGlobalVariable(atomicCounter[i]);
-                    Value* finalVal = new LoadInst(atomic_counter, atomic_counter->getName()+".val", &*it);
+                    Value *atomic_counter = M.getGlobalVariable(atomicCounter[i]); // get pointer pointing to the global variable name
+                    Value* finalVal = new LoadInst(atomic_counter, atomic_counter->getName()+".val", &*it); // atomic_counter only points to a string, but we want to print the number the string stores
                     argVec.push_back(finalVal);
-                    CallInst::Create(printF, argVec, "printf", &*it);
+                    CallInst::Create(printF, argVec, "printf", &*it); //create printf function with the return value name called printf (with suffix if already exists)
                     
                 }
                 
@@ -229,11 +235,11 @@ bool SkeletonPass::finialize(Module &M){
                 Value *format_long;
                 
                 
-                auto &functionList = M.getFunctionList();
+                auto &functionList = M.getFunctionList(); // gets the list of functions
                 Type *I64Ty = Type::getInt64Ty(M.getContext());
-                for (auto &function : functionList) {
+                for (auto &function : functionList) { //iterates over the list
                     
-                    format_long = Builder.CreateGlobalStringPtr(function.getName().str()+": %ld\n", "formatLong");
+                    format_long = Builder.CreateGlobalStringPtr(function.getName().str()+": %ld\n", "formatLong"); // create a global variable, name it based on the function name
                     std::vector<Value *> argVec;
                     argVec.push_back(format_long);
                     Twine s = function.getName()+".glob";
