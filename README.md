@@ -18,7 +18,9 @@ Run:
 
     $ clang -S -emit-llvm -Xclang -disable-O0-optnone foo.c
     
-This will generate `foo.ll` LLVM IR. We'll run our LLVM profiling pass on this IR and generate `foo2.ll` using the line below:
+The `-Xclang -disable-O0-optnone` flag ensures that Clang will allow later optimizations even when initially compiling without any. 
+    
+The line above will generate `foo.ll` LLVM IR. We'll run our LLVM profiling pass on this IR and generate `foo2.ll` using the line below:
 
     $ opt -load build/skeleton/libSkeletonPass.* -skeleton -S foo.ll > foo2.ll
 Now that we have the transformed IR we can go ahead and compile and run it using clang:
@@ -26,4 +28,4 @@ Now that we have the transformed IR we can go ahead and compile and run it using
     $ clang foo2.ll
     $ ./a.out 
     
-The `-Xclang -disable-O0-optnone` flag ensures that Clang will allow later optimizations even when initially compiling without any. 
+
